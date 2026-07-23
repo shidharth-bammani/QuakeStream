@@ -1,1 +1,3 @@
 # QuakeStream
+
+When the ground moves, minutes matter. Seismic events happen without warning, anywhere on Earth, and the raw data streams out continuously — but raw feeds aren't answers. QuakeStream turns that firehose into insight: a fully containerized pipeline that ingests live earthquake events from the USGS feed, buffers them through Kafka, processes them in real time with Spark Structured Streaming, and lands them as versioned Delta tables on object storage. Analysts query the results instantly with Trino and watch them unfold on a live Streamlit map — the entire lakehouse spun up with a single docker compose up, reproducible on any machine.
