@@ -1,0 +1,66 @@
+name: quakestream
+
+# Services are added phase by phase. Uncomment each block as we build it.
+# Phase 1: kafka
+# Phase 2: producer
+# Phase 3: minio
+# Phase 4: spark
+# Phase 5: metastore-db, hive-metastore, trino
+# Phase 6: streamlit
+
+services:
+  # ---------------------------------------------------------------------------
+  # PHASE 1 — BUFFER
+  # ---------------------------------------------------------------------------
+  # kafka:
+  #   image: apache/kafka:3.9.0
+  #   ...
+
+  # ---------------------------------------------------------------------------
+  # PHASE 2 — CONNECT
+  # ---------------------------------------------------------------------------
+  # producer:
+  #   build: ./producer
+  #   ...
+
+  # ---------------------------------------------------------------------------
+  # PHASE 3 — STORE (object store)
+  # ---------------------------------------------------------------------------
+  # minio:
+  #   image: minio/minio
+  #   ...
+
+  # ---------------------------------------------------------------------------
+  # PHASE 4 — PROCESS
+  # ---------------------------------------------------------------------------
+  # spark:
+  #   build: ./spark
+  #   ...
+
+  # ---------------------------------------------------------------------------
+  # PHASE 5 — STORE (query layer)
+  # ---------------------------------------------------------------------------
+  # metastore-db:
+  #   image: postgres:16
+  #   ...
+  # hive-metastore:
+  #   build: ./hive
+  #   ...
+  # trino:
+  #   image: trinodb/trino:latest
+  #   ...
+
+  # ---------------------------------------------------------------------------
+  # PHASE 6 — VISUALIZE
+  # ---------------------------------------------------------------------------
+  # streamlit:
+  #   build: ./streamlit
+  #   ...
+
+networks:
+  default:
+    name: quakestream-net
+
+volumes:
+  minio-data:
+  metastore-db-data:
