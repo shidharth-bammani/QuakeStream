@@ -1,61 +1,93 @@
 name: quakestream
 
-# Services are added phase by phase. Uncomment each block as we build it.
-# Phase 1: kafka
-# Phase 2: producer
-# Phase 3: minio
-# Phase 4: spark
-# Phase 5: metastore-db, hive-metastore, trino
-# Phase 6: streamlit
-
 services:
   # ---------------------------------------------------------------------------
   # PHASE 1 — BUFFER
   # ---------------------------------------------------------------------------
-  # kafka:
-  #   image: apache/kafka:3.9.0
-  #   ...
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: kafka
+    ports:
+      - "9092:9092"     # host access for debugging (kafka:9092 inside the network)
+    environment:
+      # --- KRaft: single node acts as both broker and controller ---
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # --- listeners: INTERNAL for containers, CONTROLLER for raft ---
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # --- single-node: everything replication factor 1 ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # One-shot: creates the topic, then exits. Re-runnable (ignores 'already exists').
+  kafka-init:
+    image: apache/kafka:3.9.0
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-events}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists \
+          --topic "$${KAFKA_TOPIC}" \
+          --partitions 3 --replication-factor 1
+        echo "Topics now on broker:"
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+    restart: "no"
 
   # ---------------------------------------------------------------------------
   # PHASE 2 — CONNECT
   # ---------------------------------------------------------------------------
-  # producer:
-  #   build: ./producer
-  #   ...
+  producer:
+    build: ./producer
+    container_name: producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      USGS_FEED_URL: ${USGS_FEED_URL}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-events}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # PHASE 3 — STORE (object store)
   # ---------------------------------------------------------------------------
   # minio:
-  #   image: minio/minio
-  #   ...
 
   # ---------------------------------------------------------------------------
   # PHASE 4 — PROCESS
   # ---------------------------------------------------------------------------
   # spark:
-  #   build: ./spark
-  #   ...
 
   # ---------------------------------------------------------------------------
   # PHASE 5 — STORE (query layer)
   # ---------------------------------------------------------------------------
-  # metastore-db:
-  #   image: postgres:16
-  #   ...
-  # hive-metastore:
-  #   build: ./hive
-  #   ...
-  # trino:
-  #   image: trinodb/trino:latest
-  #   ...
+  # metastore-db / hive-metastore / trino:
 
   # ---------------------------------------------------------------------------
   # PHASE 6 — VISUALIZE
   # ---------------------------------------------------------------------------
   # streamlit:
-  #   build: ./streamlit
-  #   ...
 
 networks:
   default:
