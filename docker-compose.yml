@@ -114,17 +114,134 @@ services:
   # ---------------------------------------------------------------------------
   # PHASE 4 — PROCESS
   # ---------------------------------------------------------------------------
-  # spark:
+  spark:
+    build: ./spark
+    container_name: spark
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-events}
+      DELTA_TABLE_PATH: ${DELTA_TABLE_PATH:-s3a://lakehouse/quakes}
+      CHECKPOINT_PATH: ${CHECKPOINT_PATH:-s3a://lakehouse/_checkpoints/quakes}
+      SPARK_TRIGGER_SECONDS: ${SPARK_TRIGGER_SECONDS:-30}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - spark-ivy:/opt/spark/.ivy2   # persist downloaded jars across restarts
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - "local[*]"
+      - --conf
+      - spark.jars.ivy=/opt/spark/.ivy2
+      - --packages
+      - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,io.delta:delta-spark_2.12:3.2.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262"
+      - /opt/spark/jobs/stream_job.py
+    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # PHASE 5 — STORE (query layer)
   # ---------------------------------------------------------------------------
-  # metastore-db / hive-metastore / trino:
+  metastore-db:
+    image: postgres:16
+    container_name: metastore-db
+    environment:
+      POSTGRES_DB: ${METASTORE_DB:-metastore}
+      POSTGRES_USER: ${METASTORE_DB_USER:-hive}
+      POSTGRES_PASSWORD: ${METASTORE_DB_PASSWORD:-hivepassword}
+    volumes:
+      - metastore-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${METASTORE_DB_USER:-hive} -d ${METASTORE_DB:-metastore}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  hive-metastore:
+    build: ./hive
+    container_name: hive-metastore
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://metastore-db:5432/${METASTORE_DB:-metastore}
+        -Djavax.jdo.option.ConnectionUserName=${METASTORE_DB_USER:-hive}
+        -Djavax.jdo.option.ConnectionPassword=${METASTORE_DB_PASSWORD:-hivepassword}
+    volumes:
+      - ./hive/conf/core-site.xml:/opt/hive/conf/core-site.xml:ro
+    ports:
+      - "9083:9083"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9083'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  trino:
+    image: trinodb/trino:455
+    container_name: trino
+    depends_on:
+      hive-metastore:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8080:8080"   # Trino UI + query endpoint -> http://localhost:8080
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q '\"starting\":false' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # One-shot: registers the Delta table in Trino, then exits.
+  trino-init:
+    build: ./trino-init
+    container_name: trino-init
+    depends_on:
+      trino:
+        condition: service_healthy
+    environment:
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_CATALOG: ${TRINO_CATALOG:-delta}
+      TRINO_SCHEMA: ${TRINO_SCHEMA:-default}
+      MINIO_BUCKET: ${MINIO_BUCKET:-lakehouse}
+    restart: "no"
 
   # ---------------------------------------------------------------------------
   # PHASE 6 — VISUALIZE
   # ---------------------------------------------------------------------------
-  # streamlit:
+  streamlit:
+    build: ./streamlit
+    container_name: streamlit
+    depends_on:
+      trino:
+        condition: service_healthy
+    ports:
+      - "8501:8501"   # dashboard -> http://localhost:8501
+    environment:
+      TRINO_HOST: trino
+      TRINO_PORT: 8080
+      TRINO_CATALOG: ${TRINO_CATALOG:-delta}
+      TRINO_SCHEMA: ${TRINO_SCHEMA:-default}
+    restart: unless-stopped
 
 networks:
   default:
@@ -133,3 +250,4 @@ networks:
 volumes:
   minio-data:
   metastore-db-data:
+  spark-ivy:
